@@ -1,9 +1,12 @@
-import { run } from "@openai/agents";
-import { opsAgent } from "../../../lib/agent";
+import { defaultModel, models } from "../../../lib/agent";
 import { saveInvestigation } from "../../../lib/db";
 
 export async function POST(request) {
   const encoder = new TextEncoder();
+
+  const body = await request.json().catch(() => ({}));
+  const model = models[body.model] ? body.model : defaultModel;
+  const { agent, runner, timeoutMs } = models[model];
 
   // Object => String => bytes => Stream
   const stream = new ReadableStream({
@@ -15,12 +18,12 @@ export async function POST(request) {
       const toolResults = [];
 
       try {
-        const result = await run(opsAgent, "Investigate orders-api.", {
+        const result = await runner.run(agent, "Investigate orders-api.", {
           stream: true,
           maxTurns: 6,
           signal: AbortSignal.any([
             request.signal,
-            AbortSignal.timeout(60_000),
+            AbortSignal.timeout(timeoutMs),
           ]),
         });
 
@@ -52,7 +55,8 @@ export async function POST(request) {
         await result.completed;
 
         if (result.cancelled) {
-          throw new Error("החקירה נעצרה: עברה דקה או שהדפדפן נסגר");
+          const limit = timeoutMs === 60_000 ? "עברה דקה" : `עברו ${timeoutMs / 60_000} דקות`;
+          throw new Error(`החקירה נעצרה: ${limit} או שהדפדפן נסגר`);
         }
 
         const report = result.finalOutput;

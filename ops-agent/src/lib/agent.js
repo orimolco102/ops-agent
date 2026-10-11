@@ -1,13 +1,12 @@
-import { Agent, setDefaultOpenAIKey } from "@openai/agents";
+import OpenAI from "openai";
+import { Agent, OpenAIChatCompletionsModel, Runner, setDefaultOpenAIKey } from "@openai/agents";
 import { checkServiceHealth, GetProductionInfo, GetRecentLogs } from "./tools";
 
 if(process.env.OPENAI_API_KEY) {
   setDefaultOpenAIKey(process.env.OPENAI_API_KEY);
 }
 
-export const opsAgent = new Agent({
-  name: "Ops agent",
-  instructions: `you are an on call engineer investigating services.
+const instructions = `you are an on call engineer investigating services.
 your tools are:
 1. check_service_health: returns whether the service is up, its response status and latency, and whether its dependencies (for example MongoDB) are reachable.
 2. get_recent_logs: returns the service's recent log lines, including errors and stack traces.
@@ -39,7 +38,38 @@ Answer in Hebrew with exacly 4 sections:
   ראיות:
   השערה:
   הצעד הבא:
-`,
-  model: "gpt-6-astra",
-  tools: [checkServiceHealth, GetRecentLogs, GetProductionInfo], 
+`;
+
+const tools = [checkServiceHealth, GetRecentLogs, GetProductionInfo];
+
+const ollama = new OpenAI({
+  baseURL: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
+  apiKey: "ollama", // Ollama ignores it, but the client requires one
 });
+
+function ollamaModel(name) {
+  return {
+    agent: new Agent({
+      name: "Ops agent",
+      instructions,
+      // Ollama supports Chat Completions, not the full Responses API
+      model: new OpenAIChatCompletionsModel(ollama, name),
+      tools,
+    }),
+    // Tracing uploads runs to OpenAI, which a local model doesn't need
+    runner: new Runner({ tracingDisabled: true }),
+    timeoutMs: 300_000,
+  };
+}
+
+export const models = {
+  astra: {
+    agent: new Agent({ name: "Ops agent", instructions, model: "gpt-6-astra", tools }),
+    runner: new Runner(),
+    timeoutMs: 60_000,
+  },
+  qwen: ollamaModel(process.env.OLLAMA_MODEL || "qwen3:14b"),
+  "qwen-coder": ollamaModel(process.env.OLLAMA_CODER_MODEL || "qwen3-coder:latest"),
+};
+
+export const defaultModel = process.env.AI_PROVIDER === "ollama" ? "qwen" : "astra";
